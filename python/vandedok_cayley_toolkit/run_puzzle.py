@@ -1,17 +1,3 @@
-# from vandedok_cayley_toolkit import (
-#     read_txt,
-#     write_txt,
-#     read_json,
-#     write_json,
-#     show_spectrum,
-#     gap_to_CayleyGraphDef,
-#     kamada_kawai_layered_layout,
-#     draw_graph_with_nx,
-#     bfs_result_to_nx_graph,
-#     show_multiple_spectra,
-#     wigner_semicircle,
-#     normalize_adj_matrix,
-# )
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -30,7 +16,7 @@ def draw_puzzle_graphs(
     output_dir: str,
     puzzle_name: str,
     gap_generators: str,
-    max_kamada_kawai_diameter: int,
+    max_kamada_kawai_diameter: int = 3,
     kamada_kawai_layers_weights: list = [10, 10, 70],
     max_layered_fd_diameter: int = 3,
     layered_fd_layers_weights: list = [200, 400, 1000],
@@ -44,7 +30,6 @@ def draw_puzzle_graphs(
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
     # gap_generators = read_txt("../vanedok_cayley_toolkit/puzzle_generators/pyraminx_tertraminx/tetraminx.gap")
-    print(gap_generators)
     graph_def = gap_to_CayleyGraphDef(gap_generators)
     graph = CayleyGraph(graph_def, verbose=3, device="cpu")
     plt.rcParams.update({"font.size": 10})
@@ -140,7 +125,6 @@ def run_puzzle_analysis(
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
     # gap_generators = read_txt("../vanedok_cayley_toolkit/puzzle_generators/pyraminx_tertraminx/tetraminx.gap")
-    print(gap_generators)
     graph_def = gap_to_CayleyGraphDef(gap_generators)
     graph = CayleyGraph(graph_def, verbose=3, device="cpu")
 
