@@ -562,7 +562,7 @@ def _energy_layered_fruchterman_reingold(A, nnodes, k, pos, fixed, iterations, t
     # energy-based version
     import numpy as np
     import scipy as sp
-    print("len(fixed)=",len(fixed))
+
     if gravity <= 0:
         raise ValueError(f"the gravity must be positive.")
 

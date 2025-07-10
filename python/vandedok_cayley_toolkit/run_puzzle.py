@@ -128,8 +128,6 @@ def run_puzzle_analysis(
     graph_def = gap_to_CayleyGraphDef(gap_generators)
     graph = CayleyGraph(graph_def, verbose=3, device="cpu")
 
-
-   
     # updating global plt fontsize from now on
     plt.rcParams.update({"font.size": 20})
 
