@@ -254,7 +254,7 @@ def draw_graph_with_nx(
     node_alpha=1.0,
     node_size=30,
     node_linewidth=1.0,
-    edge_alpha=0.1,
+    edge_alpha=0.2,
     edge_width=1.0,
     draw_layers_circles=False,
     figsize=(10, 10),

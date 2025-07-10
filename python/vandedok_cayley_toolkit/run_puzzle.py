@@ -5,7 +5,7 @@ import scipy
 import matplotlib.pyplot as plt
 from cayleypy import CayleyGraph, BfsResult
 import networkx as nx
-from .general_utils import write_json, write_txt
+from .general_utils import write_json, write_txt, read_json
 from .gap_utils import gap_to_CayleyGraphDef
 from .cayleypy_utils import bfs_result_to_nx_graph
 from .graphs_utils import kamada_kawai_layered_layout, layered_sequential_FD_layout, draw_graph_with_nx
@@ -136,22 +136,24 @@ def run_puzzle_analysis(
 
     bfs_result_dir = output_dir / "bfs_results"
     bfs_result_dir.mkdir(exist_ok=True)
-    bfs_result_path = bfs_result_dir / f"{puzzle_name}_bfs_result.h5"
-    # Getting all layres sizes. Might not get till the end -- try limiting the  maximum layer in this case
+    layers_path = bfs_result_dir / f"cayleypy_layers_{puzzle_name}.json"
+    # Getting all layers sizes. Might not get till the end -- try limiting the  maximum layer in this case
 
-    if redo_if_exists or not bfs_result_path.exists():
+    if redo_if_exists or not layers_path.exists():
         bfs_result = graph.bfs(max_layer_size_to_store=None, max_diameter=max_bfs_diameter)
-        bfs_result.save(bfs_result_path)
+        write_json(layers_path, bfs_result.layer_sizes)
+        layers_sizes = bfs_result.layer_sizes
+        # bfs_result.save(layers_path)
     else:
-        bfs_result = BfsResult.load(bfs_result_path)
+        # bfs_result = BfsResult.load(bfs_result_path)
+        layers_sizes = read_json(layers_path)
 
-    print("layer_sizes:", bfs_result.layer_sizes)
-    write_json(bfs_result_dir / f"cayleypy_layers_{puzzle_name}.json", bfs_result.layer_sizes)
+    print("layer_sizes:", bfs_result)
 
     fig, ax = plt.subplots(figsize=(20, 10))
     ax.set_title(f"Growth {puzzle_name}")
-    x = range(len(bfs_result.layer_sizes))
-    y = bfs_result.layer_sizes
+    x = range(len(layers_sizes))
+    y = layers_sizes
     ax.plot(x, y, label=f"{puzzle_name}")
     ax.scatter(x, y, label=f"{puzzle_name}")
     for i in range(1, 12):
