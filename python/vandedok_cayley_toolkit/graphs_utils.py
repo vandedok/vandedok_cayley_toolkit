@@ -1,16 +1,20 @@
 import networkx as nx
 import numpy as np
+import scipy as sp
 from networkx.drawing.layout import (
     random_layout,
     circular_layout,
     rescale_layout,
     _kamada_kawai_solve,
     _process_params,
+    np_random_state,
+    fruchterman_reingold_layout,
 )
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib import colormaps
 from .matplotlib_utils import get_fig_ax, lighten
+from .cayleypy_utils import bfs_result_to_nx_graph
 
 
 def layered_layout_bands(nodes_layers):
@@ -194,7 +198,7 @@ def _kamada_kawai_layered_costfn(pos_vec, np, invdist, meanweight, dim, bands, l
     cost += 0.5 * meanweight * np.sum(sumpos**2)
     grad += meanweight * sumpos
 
-    # Additianal term to move the layers to the corresponding bands
+    # Additional term to move the layers to the corresponding bands
 
     pos_radii = np.sqrt(np.sum(np.pow(pos_arr, 2), axis=1)).reshape(-1, 1)
 
@@ -286,6 +290,386 @@ def draw_graph_with_nx(
     legend_elements = [Patch(facecolor=cmap(x), label=x) for x in set(layers_ids)]
     ax.legend(handles=legend_elements, title="Layer")
     return fig, ax
+
+
+@np_random_state(10)
+def spring_layered_layout(
+    G,
+    k=None,
+    pos=None,
+    fixed=None,
+    iterations=50,
+    threshold=1e-4,
+    weight="weight",
+    scale=1,
+    center=None,
+    dim=2,
+    seed=None,
+    store_pos_as=None,
+    *,
+    # method="auto",
+    gravity=1.0,
+    nodes_layers=None,
+    layers_weight=10.0,
+):
+    """Position nodes using Fruchterman-Reingold force-directed algorithm.
+
+    The algorithm simulates a force-directed representation of the network
+    treating edges as springs holding nodes close, while treating nodes
+    as repelling objects, sometimes called an anti-gravity force.
+    Simulation continues until the positions are close to an equilibrium.
+
+    There are some hard-coded values: minimal distance between
+    nodes (0.01) and "temperature" of 0.1 to ensure nodes don't fly away.
+    During the simulation, `k` helps determine the distance between nodes,
+    though `scale` and `center` determine the size and place after
+    rescaling occurs at the end of the simulation.
+
+    Fixing some nodes doesn't allow them to move in the simulation.
+    It also turns off the rescaling feature at the simulation's end.
+    In addition, setting `scale` to `None` turns off rescaling.
+
+    Parameters
+    ----------
+    G : NetworkX graph or list of nodes
+        A position will be assigned to every node in G.
+
+    k : float (default=None)
+        Optimal distance between nodes.  If None the distance is set to
+        1/sqrt(n) where n is the number of nodes.  Increase this value
+        to move nodes farther apart.
+
+    pos : dict or None  optional (default=None)
+        Initial positions for nodes as a dictionary with node as keys
+        and values as a coordinate list or tuple.  If None, then use
+        random initial positions.
+
+    fixed : list or None  optional (default=None)
+        Nodes to keep fixed at initial position.
+        Nodes not in ``G.nodes`` are ignored.
+        ValueError raised if `fixed` specified and `pos` not.
+
+    iterations : int  optional (default=50)
+        Maximum number of iterations taken
+
+    threshold: float optional (default = 1e-4)
+        Threshold for relative error in node position changes.
+        The iteration stops if the error is below this threshold.
+
+    weight : string or None   optional (default='weight')
+        The edge attribute that holds the numerical value used for
+        the edge weight.  Larger means a stronger attractive force.
+        If None, then all edge weights are 1.
+
+    scale : number or None (default: 1)
+        Scale factor for positions. Not used unless `fixed is None`.
+        If scale is None, no rescaling is performed.
+
+    center : array-like or None
+        Coordinate pair around which to center the layout.
+        Not used unless `fixed is None`.
+
+    dim : int
+        Dimension of layout.
+
+    seed : int, RandomState instance or None  optional (default=None)
+        Used only for the initial positions in the algorithm.
+        Set the random state for deterministic node layouts.
+        If int, `seed` is the seed used by the random number generator,
+        if numpy.random.RandomState instance, `seed` is the random
+        number generator,
+        if None, the random number generator is the RandomState instance used
+        by numpy.random.
+
+    store_pos_as : str, default None
+        If non-None, the position of each node will be stored on the graph as
+        an attribute with this string as its name, which can be accessed with
+        ``G.nodes[...][store_pos_as]``. The function still returns the dictionary.
+
+    gravity: float optional (default=1.0)
+        Used only for the method='energy'.
+        The positive coefficient of gravitational forces per connected component.
+
+    Returns
+    -------
+    pos : dict
+        A dictionary of positions keyed by node
+
+    Examples
+    --------
+    >>> from pprint import pprint
+    >>> G = nx.path_graph(4)
+    >>> pos = nx.spring_layout(G)
+    >>> # suppress the returned dict and store on the graph directly
+    >>> _ = nx.spring_layout(G, seed=123, store_pos_as="pos")
+    >>> pprint(nx.get_node_attributes(G, "pos"))
+    {0: array([-0.61520994, -1.        ]),
+     1: array([-0.21840965, -0.35501755]),
+     2: array([0.21841264, 0.35502078]),
+     3: array([0.61520696, 0.99999677])}
+
+    # The same using longer but equivalent function name
+    >>> pos = nx.fruchterman_reingold_layout(G)
+
+    References
+    ----------
+    .. [1] Fruchterman, Thomas MJ, and Edward M. Reingold.
+           "Graph drawing by force-directed placement."
+           Software: Practice and experience 21, no. 11 (1991): 1129-1164.
+           http://dx.doi.org/10.1002/spe.4380211102
+    .. [2] Hamaguchi, Hiroki, Naoki Marumo, and Akiko Takeda.
+           "Initial Placement for Fruchterman--Reingold Force Model With Coordinate Newton Direction."
+           arXiv preprint arXiv:2412.20317 (2024).
+           https://arxiv.org/abs/2412.20317
+    """
+    import numpy as np
+
+    method = "energy"  # Only energy method is supported in spring_layered_layout
+
+    G, center = _process_params(G, center, dim)
+
+    if fixed is not None:
+        if pos is None:
+            raise ValueError("nodes are fixed without positions given")
+        for node in fixed:
+            if node not in pos:
+                raise ValueError("nodes are fixed without positions given")
+        nfixed = {node: i for i, node in enumerate(G)}
+        fixed = np.asarray([nfixed[node] for node in fixed if node in nfixed])
+
+    if pos is not None:
+        # Determine size of existing domain to adjust initial positions
+        dom_size = max(coord for pos_tup in pos.values() for coord in pos_tup)
+        if dom_size == 0:
+            dom_size = 1
+        pos_arr = seed.rand(len(G), dim) * dom_size + center
+
+        for i, n in enumerate(G):
+            if n in pos:
+                pos_arr[i] = np.asarray(pos[n])
+    else:
+        pos_arr = None
+        dom_size = 1
+
+    if len(G) == 0:
+        return {}
+    if len(G) == 1:
+        pos = {nx.utils.arbitrary_element(G.nodes()): center}
+        if store_pos_as is not None:
+            nx.set_node_attributes(G, pos, store_pos_as)
+        return pos
+
+    A = nx.to_scipy_sparse_array(G, weight=weight, dtype="f")
+    if k is None and fixed is not None:
+        # We must adjust k by domain size for layouts not near 1x1
+        nnodes, _ = A.shape
+        k = dom_size / np.sqrt(nnodes)
+    pos = _sparse_layered_fruchterman_reingold(
+        A, k, pos_arr, fixed, iterations, threshold, dim, seed, method, gravity, nodes_layers=nodes_layers, layers_weight=layers_weight
+    )
+
+    if fixed is None and scale is not None:
+        pos = rescale_layout(pos, scale=scale) + center
+    pos = dict(zip(G, pos))
+
+    if store_pos_as is not None:
+        nx.set_node_attributes(G, pos, store_pos_as)
+
+    return pos
+
+
+fruchterman_reingold_layered_layout = spring_layered_layout
+
+
+def layered_layout_bands(nodes_layers):
+    _, layers_counts = np.unique(nodes_layers, return_counts=True)
+
+    # vols = np.log(np.e-1+layers_counts) * layers_counts
+    # vols = np.pow(layers_counts, -0.5) * layers_counts
+    vols = layers_counts
+    vols_cumsum = np.cumsum(vols)
+    radii = np.pow(vols_cumsum / np.pi, 0.5)
+    # radii[0] = 0.01
+    radii = np.append(radii[::-1], [0])[::-1]
+    max_layer = np.max(nodes_layers)
+    radii = np.arange(max_layer + 1)
+    return np.stack([radii, radii + 0.5]).T
+
+
+def _sparse_layered_fruchterman_reingold(
+    A,
+    k=None,
+    pos=None,
+    fixed=None,
+    iterations=50,
+    threshold=1e-4,
+    dim=2,
+    seed=None,
+    method="energy",
+    gravity=1.0,
+    nodes_layers=None,
+    layers_weight=10.0,
+):
+    # Position nodes in adjacency matrix A using Fruchterman-Reingold
+    # Entry point for NetworkX graph is fruchterman_reingold_layout()
+    # Sparse version
+    import numpy as np
+    import scipy as sp
+
+    try:
+        nnodes, _ = A.shape
+    except AttributeError as err:
+        msg = "fruchterman_reingold() takes an adjacency matrix as input"
+        raise nx.NetworkXError(msg) from err
+
+    if pos is None:
+        # random initial positions
+        pos = np.asarray(seed.rand(nnodes, dim), dtype=A.dtype)
+    else:
+        # make sure positions are of same type as matrix
+        pos = pos.astype(A.dtype)
+
+    # no fixed nodes
+    if fixed is None:
+        fixed = []
+
+    # optimal distance between nodes
+    if k is None:
+        k = np.sqrt(1.0 / nnodes)
+
+    if nodes_layers is None:
+        raise ValueError("Nodes layers are requred for layered FP layout")
+    bands = layered_layout_bands(nodes_layers)
+    bands = bands[nodes_layers]
+
+    return _energy_layered_fruchterman_reingold(
+        A,
+        nnodes,
+        k,
+        pos,
+        fixed,
+        iterations,
+        threshold,
+        dim,
+        gravity,
+        bands,
+        layers_weight,
+    )
+
+
+def _energy_layered_fruchterman_reingold(A, nnodes, k, pos, fixed, iterations, threshold, dim, gravity, bands, layers_weight):
+    # Entry point for NetworkX graph is fruchterman_reingold_layout()
+    # energy-based version
+    import numpy as np
+    import scipy as sp
+
+    if gravity <= 0:
+        raise ValueError(f"the gravity must be positive.")
+
+    # make sure we have a Compressed Sparse Row format
+    try:
+        A = A.tocsr()
+    except AttributeError:
+        A = sp.sparse.csr_array(A)
+
+    # Take absolute values of edge weights and symmetrize it
+    A = np.abs(A)
+    A = (A + A.T) / 2
+
+    n_components, labels = sp.sparse.csgraph.connected_components(A, directed=False)
+    bincount = np.bincount(labels)
+    batchsize = 500
+
+    def _cost_FR(x):
+        pos = x.reshape((nnodes, dim))
+        grad = np.zeros((nnodes, dim))
+        cost = 0.0
+        for l in range(0, nnodes, batchsize):
+            r = min(l + batchsize, nnodes)
+            # difference between selected node positions and all others
+            delta = pos[l:r, np.newaxis, :] - pos[np.newaxis, :, :]
+            # distance between points with a minimum distance of 1e-5
+            distance2 = np.sum(delta * delta, axis=2)
+            distance2 = np.maximum(distance2, 1e-10)
+            distance = np.sqrt(distance2)
+            # temporary variable for calculation
+            Ad = A[l:r] * distance
+            # attractive forces and repulsive forces
+            grad[l:r] = 2 * np.einsum("ij,ijk->ik", Ad / k - k**2 / distance2, delta)
+            # integrated attractive forces
+            cost += np.sum(Ad * distance2) / (3 * k)
+            # integrated repulsive forces
+            cost -= k**2 * np.sum(np.log(distance))
+        # gravitational force from the centroids of connected components to (0.5, ..., 0.5)^T
+        centers = np.zeros((n_components, dim))
+        np.add.at(centers, labels, pos)
+        delta0 = centers / bincount[:, np.newaxis] - 0.5
+        grad += gravity * delta0[labels]
+        cost += gravity * 0.5 * np.sum(bincount * np.linalg.norm(delta0, axis=1) ** 2)
+
+        # additional term to move the layers to the corresponding bands
+        pos_radii = np.sqrt(np.sum(np.pow(pos, 2), axis=1)).reshape(-1, 1)
+
+        delta_lower = pos_radii - bands[:, 0:1]
+        delta_higher = pos_radii - bands[:, 1:]
+        mask_lower = delta_lower < 0
+        mask_higher = delta_higher > 0
+        delta_lower = delta_lower * mask_lower
+        delta_higher = delta_higher * mask_higher
+
+        cost_layers = np.pow(delta_lower, 2) + np.pow(delta_higher, 2)
+        grad_layers = (2 * delta_lower + 2 * delta_higher) * pos / pos_radii
+
+        cost += layers_weight * cost_layers.sum()
+        grad += layers_weight * grad_layers
+
+        # fix positions of fixed nodes
+        grad[fixed] = 0.0
+        return cost, grad.ravel()
+
+    # Optimization of the energy function by L-BFGS algorithm
+    options = {"maxiter": iterations, "gtol": threshold}
+    return sp.optimize.minimize(_cost_FR, pos.ravel(), method="L-BFGS-B", jac=True, options=options).x.reshape((nnodes, dim))
+
+
+def get_subgraph_with_fist_m_layers(nx_graph, m):
+    return nx_graph.subgraph([node[0] for node in nx_graph.nodes(data=True) if node[1]["layer_"] <= m])
+
+
+def layered_sequential_FD_layout(
+    nx_graph,
+    k_modifiers_no_layers=1.0,
+    k_modifiers_layers=1.0,
+    layers_weights=200.0,
+):
+
+    nodes_layers = np.array([x[1]["layer_"] for x in nx_graph.nodes(data=True)])
+    max_diameter = max(nodes_layers)
+    subgraph = get_subgraph_with_fist_m_layers(nx_graph, 0)
+    pos = {k: (0.0, 0.0) for k in subgraph.nodes}
+    fixed = list(pos.keys())
+
+    if not isinstance(k_modifiers_no_layers, list):
+        k_modifiers_no_layers = [k_modifiers_no_layers] * max_diameter
+    if not isinstance(k_modifiers_layers, list):
+        k_modifiers_layers = [k_modifiers_layers] * max_diameter
+
+    if not isinstance(layers_weights, list):
+        layers_weights = [layers_weights] * max_diameter
+    # nx.set_node_attributes(nx_graph, pos, "pos_")
+    assert len(k_modifiers_no_layers) == max_diameter, "number of k_modifiers_no_layers must be the same as the number of layers"
+    assert len(k_modifiers_layers) == max_diameter, "number of k_modifiers_layers must be the same as the number of layers"
+    assert len(layers_weights) == max_diameter, "number of layers_weights must be the same as the number of layers"
+    for max_layer, k1, k2, lw in zip(range(1, max_diameter + 1), k_modifiers_no_layers, k_modifiers_layers, layers_weights):
+        # nx_graph = bfs_result_to_nx_graph(bfs_result, max_layer=max_layer)
+        subgraph = get_subgraph_with_fist_m_layers(nx_graph, max_layer)
+        nodes_layers = np.array([x[1]["layer_"] for x in subgraph.nodes(data=True)])
+        k_scaling = 1 / np.sqrt(len(subgraph.nodes))
+        pos = fruchterman_reingold_layout(subgraph, pos=pos, fixed=fixed, k=k1 * k_scaling)
+        pos = fruchterman_reingold_layered_layout(subgraph, pos=pos, fixed=fixed, nodes_layers=nodes_layers, layers_weight=lw, k=k2 * k_scaling)
+        fixed = list(pos.keys())
+    nx.set_node_attributes(nx_graph, pos, "pos_")
+    return pos
 
 
 # def draw_graph_with_igraph(

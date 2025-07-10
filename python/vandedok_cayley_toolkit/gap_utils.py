@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from cayleypy import CayleyGraphDef
+from .cayleypy_utils import bfs_result_to_nx_graph
 
 
 def cyclic2oneline(cycle_str, n):
