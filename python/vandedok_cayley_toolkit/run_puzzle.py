@@ -156,9 +156,10 @@ def run_puzzle_analysis(
     y = layers_sizes
     ax.plot(x, y, label=f"{puzzle_name}")
     ax.scatter(x, y, label=f"{puzzle_name}")
-    for i in range(1, 12):
+    border = np.argmax(y)
+    for i in range(1, border):
         plt.text(x[i], y[i], f"{y[i]:.1e}", fontsize=20, ha="right", va="bottom", fontweight="bold")
-    for i in range(12, len(y)):
+    for i in range(border, len(y)):
         plt.text(x[i], y[i], f"{y[i]:.1e}", fontsize=20, ha="left", va="bottom", fontweight="bold")
     ax.set_yscale("log")
     ax.grid(True, which="major")
