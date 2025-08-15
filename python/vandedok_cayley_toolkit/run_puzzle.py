@@ -48,7 +48,7 @@ def draw_puzzle_graphs(
         return_all_edges=True,
         return_all_hashes=True,
         max_layer_size_to_store=None,
-        max_diameter=max(max_kamada_kawai_diameter, max_layered_fd_diameter, max_fd_diameter),
+        max_diameter=max(max_kamada_kawai_diameter, max_layered_fd_diameter, max_fd_diameter) + 1,
     )
 
     layout = "layered_kamada_kawai"
@@ -96,6 +96,7 @@ def draw_puzzle_graphs(
     layout_dir = graphs_dir / f"{layout}"
     layout_dir.mkdir(exist_ok=True)
     graph_max_layers = list(range(1, max_fd_diameter + 1))
+
     for max_layer, k_modifier in zip(graph_max_layers, fd_k_modifiers):
         figure_path = layout_dir / f"{puzzle_name}_max_layer_{max_layer}_layout_{layout}"
         if redo_if_exists or not figure_path.exists():
@@ -156,7 +157,7 @@ def run_puzzle_analysis(
     y = layers_sizes
     ax.plot(x, y, label=f"{puzzle_name}")
     ax.scatter(x, y, label=f"{puzzle_name}")
-    border = np.argmax(y)
+    border = np.argmax(y) + 1
     for i in range(1, border):
         plt.text(x[i], y[i], f"{y[i]:.1e}", fontsize=20, ha="right", va="bottom", fontweight="bold")
     for i in range(border, len(y)):

@@ -277,15 +277,7 @@ def draw_graph_with_nx(
         for circle in circles[::-1]:
             ax.add_patch(circle)
 
-    nx.draw_networkx_nodes(
-        nx_graph,
-        pos,
-        node_color=node_colors,
-        node_size=node_size,
-        alpha=node_alpha,
-        linewidths=node_linewidth,
-        edgecolors="black",
-    )
+    nx.draw_networkx_nodes(nx_graph, pos, node_color=node_colors, node_size=node_size, alpha=node_alpha, linewidths=node_linewidth, edgecolors="black", ax=ax)
     nx.draw_networkx_edges(nx_graph, pos, alpha=edge_alpha, width=edge_width, ax=ax)
     legend_elements = [Patch(facecolor=cmap(x), label=x) for x in set(layers_ids)]
     ax.legend(handles=legend_elements, title="Layer")
@@ -642,7 +634,6 @@ def layered_sequential_FD_layout(
     k_modifiers_layers=1.0,
     layers_weights=200.0,
 ):
-
     nodes_layers = np.array([x[1]["layer_"] for x in nx_graph.nodes(data=True)])
     max_diameter = max(nodes_layers)
     subgraph = get_subgraph_with_fist_m_layers(nx_graph, 0)
