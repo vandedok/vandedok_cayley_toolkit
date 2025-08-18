@@ -15,6 +15,7 @@ class TrainNoBellmanCfg(BaseModel):
     batch_size: int = 1024
     learning_rate: float = 0.001
     num_epochs: int = 30
+    early_stop_patience: int = 10
 
 
 class TrainBellmanCfg(BaseModel):
@@ -25,6 +26,8 @@ class TrainBellmanCfg(BaseModel):
     epochs_per_update: int = 10
     learning_rate: float = 0.001
     boundary_loss: float = 0.1
+    in_update_early_stop_patience: int = 10
+    global_early_stop_patience: int = 10
 
 
 class TrainCfg(BaseModel):
