@@ -21,10 +21,10 @@ def layered_layout_bands(nodes_layers):
     _, layers_counts = np.unique(nodes_layers, return_counts=True)
 
     # vols = np.log(np.e-1+layers_counts) * layers_counts
-    # vols = np.pow(layers_counts, -0.5) * layers_counts
+    # vols = np.power(layers_counts, -0.5) * layers_counts
     vols = layers_counts
     vols_cumsum = np.cumsum(vols)
-    radii = np.pow(vols_cumsum / np.pi, 0.5)
+    radii = np.power(vols_cumsum / np.pi, 0.5)
     # radii[0] = 0.01
     radii = np.append(radii[::-1], [0])[::-1]
     max_layer = np.max(nodes_layers)
@@ -200,7 +200,7 @@ def _kamada_kawai_layered_costfn(pos_vec, np, invdist, meanweight, dim, bands, l
 
     # Additional term to move the layers to the corresponding bands
 
-    pos_radii = np.sqrt(np.sum(np.pow(pos_arr, 2), axis=1)).reshape(-1, 1)
+    pos_radii = np.sqrt(np.sum(np.power(pos_arr, 2), axis=1)).reshape(-1, 1)
 
     delta_lower = pos_radii - bands[:, 0:1]
     delta_higher = pos_radii - bands[:, 1:]
@@ -209,7 +209,7 @@ def _kamada_kawai_layered_costfn(pos_vec, np, invdist, meanweight, dim, bands, l
     delta_lower = delta_lower * mask_lower
     delta_higher = delta_higher * mask_higher
 
-    cost_layers = np.pow(delta_lower, 2) + np.pow(delta_higher, 2)
+    cost_layers = np.power(delta_lower, 2) + np.power(delta_higher, 2)
     grad_layers = (2 * delta_lower + 2 * delta_higher) * pos_arr / pos_radii
 
     cost += layers_weight * cost_layers.sum()
@@ -477,10 +477,10 @@ def layered_layout_bands(nodes_layers):
     _, layers_counts = np.unique(nodes_layers, return_counts=True)
 
     # vols = np.log(np.e-1+layers_counts) * layers_counts
-    # vols = np.pow(layers_counts, -0.5) * layers_counts
+    # vols = np.power(layers_counts, -0.5) * layers_counts
     vols = layers_counts
     vols_cumsum = np.cumsum(vols)
-    radii = np.pow(vols_cumsum / np.pi, 0.5)
+    radii = np.power(vols_cumsum / np.pi, 0.5)
     # radii[0] = 0.01
     radii = np.append(radii[::-1], [0])[::-1]
     max_layer = np.max(nodes_layers)
@@ -600,7 +600,7 @@ def _energy_layered_fruchterman_reingold(A, nnodes, k, pos, fixed, iterations, t
         cost += gravity * 0.5 * np.sum(bincount * np.linalg.norm(delta0, axis=1) ** 2)
 
         # additional term to move the layers to the corresponding bands
-        pos_radii = np.sqrt(np.sum(np.pow(pos, 2), axis=1)).reshape(-1, 1)
+        pos_radii = np.sqrt(np.sum(np.power(pos, 2), axis=1)).reshape(-1, 1)
 
         delta_lower = pos_radii - bands[:, 0:1]
         delta_higher = pos_radii - bands[:, 1:]
@@ -609,7 +609,7 @@ def _energy_layered_fruchterman_reingold(A, nnodes, k, pos, fixed, iterations, t
         delta_lower = delta_lower * mask_lower
         delta_higher = delta_higher * mask_higher
 
-        cost_layers = np.pow(delta_lower, 2) + np.pow(delta_higher, 2)
+        cost_layers = np.power(delta_lower, 2) + np.power(delta_higher, 2)
         grad_layers = (2 * delta_lower + 2 * delta_higher) * pos / pos_radii
 
         cost += layers_weight * cost_layers.sum()
