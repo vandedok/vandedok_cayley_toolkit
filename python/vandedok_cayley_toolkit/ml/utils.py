@@ -26,8 +26,8 @@ def get_rw_true_distances(X, X_bfs, y_bfs, batch_size=128):
         diff = batch.unsqueeze(1) - X_bfs.unsqueeze(0)
         matches = (diff == 0).all(dim=2)  # [B, N]
         # For each batch element, find the first match (if any)
-        idxs = matches.float().argmax(dim=1).cpu()
-        found = matches.any(dim=1).cpu()
+        idxs = matches.float().argmax(dim=1)
+        found = matches.any(dim=1)
         # Assign y_bfs[idx] if found, else -1
         y_true_batch = torch.where(found, y_bfs[idxs], torch.full_like(idxs, -1))
         y_true.append(y_true_batch)

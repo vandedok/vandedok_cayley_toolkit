@@ -1,4 +1,4 @@
 from .cfg import CayleyMLCfg
-from .train import train_no_bellman, train_with_bellman
-from .eval import evaluate
+from .train import train_rw_reg, train_bfs_reg, train_with_bellman
+from .eval import evaluate, measure_success
 from .utils import get_bfs_xy, get_rw_true_distances
