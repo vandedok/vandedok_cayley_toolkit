@@ -87,6 +87,7 @@ class TrainRWReg(BaseModel):
     batch_size: int = 1024
     early_stop_patience: int = 10
     save_every: None | int = 500 
+    save_best: None | int = 1
 
 # class TrainBfsReg(BaseModel):
 #     batch_size: int = 1024
@@ -109,7 +110,8 @@ class TrainBellmanCfg(BaseModel):
     in_update_early_stop_patience: int = 10
     global_early_stop_patience: int = 10
     save_every: None | int = 500 
-
+    save_best: None | int = 1
+    bfs_for_boundary: int = 1
 
 class TrainCfg(BaseModel):
     random_walks: RandomWalksCfg = RandomWalksCfg()
@@ -133,7 +135,13 @@ class ModelCfg(BaseModel):
     hidden_dims: list[int] = [512, 256]
     y_norm: float = 1
 
+class LoggingCfg(BaseModel):
+    py_logs: bool = True
+    csv_logs: bool = True
+    tb_logs: bool = True
+
 class CayleyMLCfg(BaseModel):
     model: ModelCfg = ModelCfg()
     train: TrainCfg = TrainCfg()
     eval: SingleEvalCfg | list[SingleEvalCfg] = SingleEvalCfg()
+    logging: LoggingCfg = LoggingCfg()

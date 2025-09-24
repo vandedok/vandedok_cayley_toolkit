@@ -1,4 +1,5 @@
 import torch
+from math import sqrt
 from torch import nn
 
 class AssymMSELoss(nn.Module):
@@ -10,6 +11,12 @@ class AssymMSELoss(nn.Module):
         assert (pred_reg_coef is None) == (pred_reg_target is None), "Both pred_reg_coef and pred_reg_target must be None or not None"
         self.pred_reg_coef = pred_reg_coef
         self.pred_reg_target = pred_reg_target
+
+    def scale_loss_train(self, loss, y_norm, n):
+        return sqrt(loss) * y_norm
+    
+    def scale_loss_val(self, loss, y_norm, n):
+        return sqrt(loss)
 
     def forward(self, gt, pred, weights=None):
         diff = gt - pred
@@ -33,6 +40,11 @@ class AssymMAELoss(nn.Module):
         self.pred_reg_coef = pred_reg_coef
         self.pred_reg_target = pred_reg_target
 
+    def scale_loss_train(self, loss, y_norm, n):
+        return loss * y_norm
+    
+    def scale_loss_val(self, loss, y_norm, n):
+        return loss
 
     def forward(self, gt, pred, weights=None):
         diff = gt - pred

@@ -1,9 +1,13 @@
+import time
 import logging
+import csv
 from cayleypy import CayleyGraph
 from pathlib import Path
+from shutil  import rmtree
 from tqdm.auto import tqdm
 import torch
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from sklearn.model_selection import train_test_split
 from .cfg import CayleyMLCfg
@@ -14,6 +18,56 @@ from copy import deepcopy
 logger = logging.getLogger()
 logging.basicConfig(level=20)
 EARLY_STOP_VERBOSE=False
+
+
+class ExperimentSaver:
+
+    def __init__(self, exp_dir: None|str|Path, cfg: CayleyMLCfg, trace_func=print, overwrite=False):
+        self.exp_dir = Path(exp_dir)
+        self.trace_func = trace_func
+
+        if overwrite and self.exp_dir.exists():
+            rmtree(self.exp_dir)
+            
+        if not self.exp_dir.exists():
+            self.exp_dir.mkdir()
+        else:
+            raise ValueError("Experiment dir: {self.exp_dir} already exists, aborting")
+        
+        self.checkpoints_dir = self.exp_dir / "checkpoints"
+        self.best_models_dir = self.exp_dir / "best_model"
+        write_json(self.exp_dir/"cfg.json", cfg.model_dump())
+  
+
+    def get_checkpoint_path(self, subpath, filename):
+        path_to_return = self.exp_dir
+        if subpath is not None:
+            path_to_return = path_to_return / subpath
+            path_to_return.mkdir(parents=True, exist_ok=True)
+        if not filename.endswith(".pth"):
+            filename = f"{filename}.pth"
+        return path_to_return / filename
+    
+    def save_training_state(self, subpath, filename, model, optimizer, step_i):
+        checkpoint = { 
+            'step_i': step_i,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
+        if self.exp_dir is not None:
+            path_to_save = self.get_checkpoint_path(subpath, filename)
+            self.trace_func(f"Saving model to: {path_to_save}")
+            torch.save(checkpoint, path_to_save) 
+
+    def trigger_saving_every(self, subpath, filename, model, optimizer, step_i, save_every):
+        if step_i!=0 and save_every is not None and step_i%save_every==0:
+            self.save_training_state(subpath, filename, model, optimizer, step_i)
+
+    def trigger_saving_best(self, subpath, filename, model, optimizer, step_i, is_best, save_best):
+        # TODO: add saving multiple best models
+        if is_best and save_best:
+            self.save_training_state(subpath, filename, model, optimizer, step_i)
+
 
 def get_train_val(X, y, val_ratio: float = 0.1, stratify: bool = False):
     total_size = X.shape[0]
@@ -35,7 +89,56 @@ def epoch_val(model: torch.nn.Module, X_val: torch.Tensor, y_val: torch.Tensor, 
             pred = model(xb).squeeze()
             loss = loss_fn(pred, yb)
             total_val_loss += loss.item() * xb.size(0)
-    return total_val_loss / val_size
+    avg_val_loss = total_val_loss / val_size
+    avg_val_loss = loss_fn.scale_loss_val(avg_val_loss, model.y_norm, val_size)
+    return avg_val_loss
+
+
+class MLLogger:
+
+    def __init__(self, labels: list[str], logs_dir: str, py_logs: bool, tb_logs: bool, csv_logs: bool):
+        self.logs_dir = Path(logs_dir)
+        self.tb_logs = tb_logs
+        self.csv_logs = csv_logs
+        self.py_logs = py_logs
+        self.labels = set(labels)
+        self.steps = {x:0 for x in self.labels}
+        self.logs_dir.mkdir()
+        if self.csv_logs:
+            self.csv_dir = self.logs_dir / "csv"
+            self.csv_dir.mkdir()
+            for label in self.labels:
+                csv_path = self.get_csv_path(label)
+                with open(csv_path, mode="w", newline="") as f: 
+                    writer = csv.writer(f)
+                    writer.writerow(["step", "train_loss", "val_loss"])   
+
+        if self.tb_logs:
+            self.tensorboard_dir = self.logs_dir / "tensorboard"
+            self.tensorboard_dir.mkdir()
+            self.tb_writer = SummaryWriter(log_dir=self.tensorboard_dir)
+
+    def get_csv_path(self, label):
+        return self.csv_dir / f"{label}.csv"
+
+    def log(self, train_value, val_value, label=""):
+        assert label in self.labels, f"Logger didn't find label '{label}' in self.labels: {self.labels}"
+        walltime = time.time()
+        step_i = self.steps[label]
+
+        if self.py_logs:
+            logger.info(f"{label}: Step: {step_i} | Train: {train_value:.5f} | Val: {val_value:.5f}")
+
+        if self.csv_logs:
+            csv_path = self.get_csv_path(label)
+            with open(csv_path, mode="a", newline="") as f: 
+                writer = csv.writer(f)
+                writer.writerow([step_i, train_value, val_value])  
+
+        if self.tb_logs:
+            self.tb_writer.add_scalars(label, {"train": train_value, "val": val_value}, global_step=step_i, walltime=walltime) 
+
+        self.steps[label] += 1
 
 @torch.compile
 def regress_epoch_train(X_train, X_val, y_train, y_val, model, loss_fn, optimizer, epoch_i, batch_size, weights=None):
@@ -69,26 +172,33 @@ def regress_epoch_train(X_train, X_val, y_train, y_val, model, loss_fn, optimize
     else:
         avg_val_loss = torch.nan
 
-    return avg_train_loss*(float(model.y_norm)), avg_val_loss
+    avg_train_loss = loss_fn.scale_loss_train(avg_train_loss, float(model.y_norm), train_size)   
+
+    return avg_train_loss, avg_val_loss
 
 
-
-
-
-def train_rw_reg(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Module):
+def train_rw_reg(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Module, exp_saver: ExperimentSaver):
     loss_fn = cfg.train.rw_reg.loss.get_loss_fn()
     optimizer  = cfg.train.rw_reg.optimizer.get_optimizer(model.parameters())
     rw_cfg = cfg.train.random_walks
     early_stopper = EarlyStopper(patience=cfg.train.rw_reg.early_stop_patience, verbose=EARLY_STOP_VERBOSE, path=None, in_mem_saving=True, label="RW-reg", trace_func=logger.info)
+    ml_logger = MLLogger(logs_dir=exp_saver.exp_dir/"logs", labels=["rw_reg"], py_logs=cfg.logging.py_logs, tb_logs=cfg.logging.tb_logs, csv_logs=cfg.logging.csv_logs)
+    
     for epoch_i in range(cfg.train.rw_reg.num_epochs):
         X, y = graph.random_walks(width=rw_cfg.width, length=rw_cfg.length, mode=rw_cfg.mode, nbt_history_depth=rw_cfg.nbt_history_depth)
         X_train, X_val, y_train, y_val = get_train_val(X, y, cfg.train.val_ratio, stratify=True)
         avg_train_loss, avg_val_loss = regress_epoch_train(X_train, X_val, y_train, y_val, model, loss_fn, optimizer, epoch_i, cfg.train.rw_reg.batch_size)
-        logger.info(f"Epoch {epoch_i} | Train Loss: {avg_train_loss:.5f} | Val Loss: {avg_val_loss:.5f}")
+        # logger.info(f"Epoch {epoch_i} | Train Loss: {avg_train_loss:.5f} | Val Loss: {avg_val_loss:.5f}")
+        ml_logger.log(train_value=avg_train_loss, val_value=avg_val_loss, label="rw_reg")
         early_stopper(avg_val_loss, model)
+
+        exp_saver.trigger_saving_every("rw_reg_checkpoints", f"epoch_{epoch_i}_val_{avg_val_loss:.5f}", model, optimizer, epoch_i, cfg.train.rw_reg.save_every)
+        exp_saver.trigger_saving_best("special_checkpoints", f"rw_reg_best_val_loss_{avg_val_loss:.5f}", model, optimizer, epoch_i, early_stopper.improvement_on_last_epoch, cfg.train.rw_reg.save_best)
+
         if early_stopper.early_stop:
-            model.load_state_dict(early_stopper.get_model_weights())
             break
+    
+    exp_saver.save_training_state("special_checkpoints", f"rw_reg_last", model, optimizer, epoch_i)
 
 
 def train_bfs_reg(cfg: CayleyMLCfg, model, X_bfs, y_bfs):
@@ -122,29 +232,6 @@ def get_neighbors(X, gens):
     return neighbors
 
 
-# def depr_bellman_update(model, X, y, generators, batch_size, goal_state, discount):
-#     model.eval()
-#     X_neighbors = get_neighbors(X, generators)  # [N, A, S]
-#     X_neighbors_flat = X_neighbors.view(-1, X.shape[1])  # [N * A, S]
-#     with torch.no_grad():
-#         num_states = X_neighbors_flat.shape[0]
-#         preds_flat = torch.zeros(num_states, device=X_neighbors_flat.device)
-#         with torch.no_grad():
-#             for start in range(0, num_states, batch_size):
-#                 end = min(start + batch_size, num_states)
-#                 batch = X_neighbors_flat[start:end]
-#                 preds_flat[start:end] = model(batch).squeeze()
-#         preds = preds_flat.view(X_neighbors.shape[0], -1)  # [N, A]
-#         targets = 1 + discount*preds.min(dim=1)[0]  # [N]
-#         targets = torch.min(targets, y)
-#         targets = torch.clamp_min(targets, 1)
-
-#         is_goal = (X == goal_state).all(dim=1)
-#         targets[is_goal] = 0
-
-#     return targets.detach()
-
-
 def get_true_distances(X, X_bfs, y_bfs, batch_size=128):
     # Batch matching X_enc to X_bfs_enc for efficiency
     y_true = []
@@ -164,7 +251,7 @@ def get_true_distances(X, X_bfs, y_bfs, batch_size=128):
   
     return torch.cat(y_true, dim=0).int()
 
-def bellman_update(model, X, y, generators, discount, update_quantile, X_bfs, y_bfs, batch_size, boundary_batch_size,):
+def bellman_update(model, X, y, generators, discount, update_quantile, X_bfs, y_bfs, batch_size, boundary_batch_size):
     model.eval()
 
     y_true = get_true_distances(X, X_bfs, y_bfs, batch_size=boundary_batch_size).float()
@@ -201,46 +288,8 @@ def bellman_update(model, X, y, generators, discount, update_quantile, X_bfs, y_
 
 
 
-class ExperimentSaver:
 
-    def __init__(self, exp_dir: None|str|Path, cfg: CayleyMLCfg, trace_func=print):
-        self.exp_dir = Path(exp_dir)
-        self.trace_func = trace_func
-
-        if not exp_dir.exists():
-            self.exp_dir.mkdir()
-        else:
-            raise ValueError("Experiment dir: {self.exp_dir} already exists, aborting")
-        self.checkpoints_dir = self.exp_dir / "checkpoints"
-        self.best_models_dir = self.exp_dir / "best_model"
-        write_json(self.exp_dir/"cfg.json", cfg.model_dump())
-  
-
-    def get_checkpoint_path(self, subpath, filename):
-        path_to_return = self.exp_dir
-        if subpath is not None:
-            path_to_return = path_to_return / subpath
-        if not filename.endswith(".pth"):
-            filename = f"{filename}.pth"
-        return path_to_return / filename
-    
-    def save_traininig_state(self, subpath, filename, model, optimizer, epoch_i):
-        checkpoint = { 
-            'epoch': epoch_i,
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }
-        if self.exp_dir is not None:
-            path_to_save = self.get_checkpoint_path(subpath, filename)
-            self.trace_func(f"Saving model to: {path_to_save}")
-            torch.save(checkpoint, path_to_save) 
-
-    def trigger_save_every(self, model, optimizer, step_i, save_every):
-        if step_i%save_every  == 0 and step_i !=0:
-            self.save_traininig_state("checkpoints", f"step_{step_i}" , model, optimizer, step_i)
-
-
-def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Module, X_bfs: torch.Tensor , y_bfs: torch.Tensor):
+def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Module, X_bfs: torch.Tensor , y_bfs: torch.Tensor, exp_saver: ExperimentSaver):
     
     loss_fn = cfg.train.bellman.loss.get_loss_fn()
     optimizer  = cfg.train.bellman.optimizer.get_optimizer(model.parameters())
@@ -249,6 +298,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
     global_early_stopper = EarlyStopper(patience=cfg.train.bellman.global_early_stop_patience, verbose=EARLY_STOP_VERBOSE, path=None, in_mem_saving=True, label="Global-Bellman", trace_func=logger.info)
     in_update_early_stopper = EarlyStopper(patience=cfg.train.bellman.in_update_early_stop_patience, verbose=EARLY_STOP_VERBOSE, path=None, in_mem_saving=True, label="InUpdate-Bellman", trace_func=logger.info)
     epochs_per_update = cfg.train.bellman.epochs_per_update
+    ml_logger = MLLogger(logs_dir=exp_saver.exp_dir/"logs", labels=["bellman", "bellman_in_update"], py_logs=cfg.logging.py_logs, tb_logs=cfg.logging.tb_logs, csv_logs=cfg.logging.csv_logs)
 
     for bellman_i in range(cfg.train.bellman.n_updates):
         torch.cuda.empty_cache()
@@ -273,7 +323,6 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
             boundary_batch_size=64,
             )  # In some setting goal state is not central state
         
-    
         X_train, X_val, y_train, y_val = get_train_val(X, y_bellman, cfg.train.val_ratio, stratify=False)
 
         avg_train_loss_per_update = 0
@@ -283,27 +332,29 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
 
             avg_train_loss_per_update += float(avg_train_loss)
             avg_val_loss_per_update += float(avg_val_loss)
-            logger.info(f"Epoch {epoch_i} | Train Loss: {avg_train_loss:.5f} | Val Loss: {avg_val_loss:.5f}")
+            # logger.info(f"Epoch {epoch_i} | Train Loss: {avg_train_loss:.5f} | Val Loss: {avg_val_loss:.5f}")
+            ml_logger.log(train_value=avg_train_loss, val_value=avg_val_loss, label="bellman_in_update")
+
             in_update_early_stopper(avg_val_loss, model)
             if in_update_early_stopper.early_stop:
                 model.load_state_dict(in_update_early_stopper.get_model_weights())
                 in_update_early_stopper.reset()
                 break
 
-
         avg_train_loss_per_update /= (epoch_i+1)
         avg_val_loss_per_update /= (epoch_i+1)
         global_early_stopper(avg_val_loss_per_update, model)
 
+        exp_saver.trigger_saving_every("bellman_checkpoints", f"update_{bellman_i}_val_loss_{avg_val_loss:.5f}", model, optimizer, bellman_i, cfg.train.bellman.save_every)
+        exp_saver.trigger_saving_best("special_checkpoints", f"bellman_best_update_{bellman_i}_val_loss_{avg_val_loss:.5f}", model, optimizer, bellman_i, global_early_stopper.improvement_on_last_epoch, cfg.train.bellman.save_best)
 
         if global_early_stopper.early_stop:
-            # Using the last bellman update instead of the "best" one
-            # model.load_state_dict(global_early_stopper.get_model_weights())
             break
+        
+        ml_logger.log(train_value=avg_train_loss, val_value=avg_val_loss, label="bellman")
+        # logger.info(f"Bellman_update: {bellman_i} | Avg Train Loss: {avg_train_loss_per_update:.4f} | Avg Val Loss: {avg_val_loss_per_update:.4f}")
 
-        logger.info(f"Bellman_update: {bellman_i} | Avg Train Loss: {avg_train_loss_per_update:.4f} | Avg Val Loss: {avg_val_loss_per_update:.4f}")
-
-
+    exp_saver.save_training_state("special_checkpoints", f"bellman_last", model, optimizer, bellman_i)
 
 
 ### Taken and modified from  https://github.com/Bjarten/early-stopping-pytorch
