@@ -36,6 +36,7 @@ class ExperimentSaver:
         
         self.checkpoints_dir = self.exp_dir / "checkpoints"
         self.best_models_dir = self.exp_dir / "best_model"
+        self.best_cpt_path = None
         write_json(self.exp_dir/"cfg.json", cfg.model_dump())
   
 
@@ -66,7 +67,10 @@ class ExperimentSaver:
     def trigger_saving_best(self, subpath, filename, model, optimizer, step_i, is_best, save_best):
         # TODO: add saving multiple best models
         if is_best and save_best:
+            if self.best_cpt_path is not None:
+                self.best_cpt_path.unlink()
             self.save_training_state(subpath, filename, model, optimizer, step_i)
+            self.best_cpt_path = self.get_checkpoint_path(subpath, filename)
 
 
 def get_train_val(X, y, val_ratio: float = 0.1, stratify: bool = False):
@@ -275,7 +279,7 @@ def bellman_update(model, X, y, generators, discount, update_quantile, X_bfs, y_
         if update_quantile is None:
             targets = 1 + discount*preds.min(dim=1)[0]  # [Nf]
         else:
-            targets= 1 + discount*targets.quantile(q=update_quantile, dim=1) # [Nf]
+            targets= 1 + discount*preds.quantile(q=update_quantile, dim=1) # [Nf]
 
         targets = torch.min(targets, y_to_find)
         targets = torch.clamp_min(targets, 1)
@@ -327,12 +331,12 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
 
         avg_train_loss_per_update = 0
         avg_val_loss_per_update = 0
+        optimizer.state.clear() # clears accumulated values of the optimizer -- not sure if it is a good idea though
         for epoch_i in range(epochs_per_update):
             avg_train_loss, avg_val_loss = regress_epoch_train(X_train, X_val, y_train, y_val, model, loss_fn, optimizer, epoch_i, cfg.train.bellman.in_update_batch_size)
 
             avg_train_loss_per_update += float(avg_train_loss)
             avg_val_loss_per_update += float(avg_val_loss)
-            # logger.info(f"Epoch {epoch_i} | Train Loss: {avg_train_loss:.5f} | Val Loss: {avg_val_loss:.5f}")
             ml_logger.log(train_value=avg_train_loss, val_value=avg_val_loss, label="bellman_in_update")
 
             in_update_early_stopper(avg_val_loss, model)
@@ -408,17 +412,21 @@ class EarlyStopper:
 
         elif val_loss < self.best_val_loss - self.delta:
             # Significant improvement detected
+            self.improvement_on_last_epoch = True
             self.best_val_loss = val_loss
             self.save_checkpoint(val_loss, model)
             self.counter = 0  # Reset counter since improvement occurred
-            self.improvement_on_last_epoch = True
+            
         else:
-            # No significant improvement
-            self.counter += 1
-            self.trace_func(f'{self.label}-EarlyStopper counter: {self.counter} out of {self.patience}')
-            self.improvement_on_last_epoch = False
-            if self.counter >= self.patience:
-                self.early_stop = True
+            self.improvement_on_last_epoch = False # nneeds to be here to trace best model
+            if self.patience < 0:
+                pass
+            else:
+                # No significant improvement
+                self.counter += 1
+                self.trace_func(f'{self.label}-EarlyStopper counter: {self.counter} out of {self.patience}')
+                if self.counter >= self.patience:
+                    self.early_stop = True
 
     def save_checkpoint(self, val_loss, model: torch.nn.Module):
         '''Saves model when validation loss decreases.'''
