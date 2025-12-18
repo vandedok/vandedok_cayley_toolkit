@@ -135,7 +135,7 @@ def main():
         logger.info("Drawing finished.")
 
         logger.info("Final sync with R2...")
-        exp_saver.sync_with_r2(model)
+        exp_saver.sync_with_r2()
         logger.info("All done.")
 
     except Exception as e:
