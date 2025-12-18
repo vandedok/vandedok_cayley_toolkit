@@ -135,6 +135,7 @@ class TrainRWReg(BaseModel):
     early_stop_patience: int = 10
     save_every: None | int = 500 
     save_best: None | int = 1
+    r2_sync_every: None | int = None
 
 # class TrainBfsReg(BaseModel):
 #     batch_size: int = 1024
@@ -156,9 +157,11 @@ class TrainBellmanCfg(BaseModel):
     in_update_batch_size: int = 1024
     in_update_early_stop_patience: int = 10
     global_early_stop_patience: int = 10
+    bfs_for_boundary: int = 1
     save_every: None | int = 500 
     save_best: None | int = 1
-    bfs_for_boundary: int = 1
+    r2_sync_every: None | int = None
+
 
 class TrainCfg(BaseModel):
     random_walks: RandomWalksCfg = RandomWalksCfg()

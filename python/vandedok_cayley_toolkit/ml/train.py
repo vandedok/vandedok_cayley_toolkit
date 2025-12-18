@@ -3,15 +3,13 @@ import logging
 import csv
 from cayleypy import CayleyGraph
 from pathlib import Path
-from shutil  import rmtree
-from tqdm.auto import tqdm
 import torch
-from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from sklearn.model_selection import train_test_split
 from .cfg import CayleyMLCfg
-from .. import write_json
+from .exp_saver import ExperimentSaver
+
 
 from copy import deepcopy
 
@@ -20,57 +18,6 @@ logging.basicConfig(level=20)
 EARLY_STOP_VERBOSE=False
 
 
-class ExperimentSaver:
-
-    def __init__(self, exp_dir: None|str|Path, cfg: CayleyMLCfg, trace_func=print, overwrite=False):
-        self.exp_dir = Path(exp_dir)
-        self.trace_func = trace_func
-
-        if overwrite and self.exp_dir.exists():
-            rmtree(self.exp_dir)
-            
-        if not self.exp_dir.exists():
-            self.exp_dir.mkdir()
-        else:
-            raise ValueError("Experiment dir: {self.exp_dir} already exists, aborting")
-        
-        self.checkpoints_dir = self.exp_dir / "checkpoints"
-        self.best_models_dir = self.exp_dir / "best_model"
-        self.best_cpt_path = None
-        write_json(self.exp_dir/"cfg.json", cfg.model_dump())
-  
-
-    def get_checkpoint_path(self, subpath, filename):
-        path_to_return = self.exp_dir
-        if subpath is not None:
-            path_to_return = path_to_return / subpath
-            path_to_return.mkdir(parents=True, exist_ok=True)
-        if not filename.endswith(".pth"):
-            filename = f"{filename}.pth"
-        return path_to_return / filename
-    
-    def save_training_state(self, subpath, filename, model, optimizer, step_i):
-        checkpoint = { 
-            'step_i': step_i,
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }
-        if self.exp_dir is not None:
-            path_to_save = self.get_checkpoint_path(subpath, filename)
-            self.trace_func(f"Saving model to: {path_to_save}")
-            torch.save(checkpoint, path_to_save) 
-
-    def trigger_saving_every(self, subpath, filename, model, optimizer, step_i, save_every):
-        if step_i!=0 and save_every is not None and step_i%save_every==0:
-            self.save_training_state(subpath, filename, model, optimizer, step_i)
-
-    def trigger_saving_best(self, subpath, filename, model, optimizer, step_i, is_best, save_best):
-        # TODO: add saving multiple best models
-        if is_best and save_best:
-            if self.best_cpt_path is not None:
-                self.best_cpt_path.unlink()
-            self.save_training_state(subpath, filename, model, optimizer, step_i)
-            self.best_cpt_path = self.get_checkpoint_path(subpath, filename)
 
 
 def get_train_val(X, y, val_ratio: float = 0.1, stratify: bool = False):
@@ -306,6 +253,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
 
     for bellman_i in range(cfg.train.bellman.n_updates):
         torch.cuda.empty_cache()
+        graph.free_memory()
         X, y = graph.random_walks(width=rw_cfg.width, length=rw_cfg.length, mode=rw_cfg.mode, nbt_history_depth=rw_cfg.nbt_history_depth)
         
         if cfg.train.bellman.add_random_states:
@@ -332,7 +280,9 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
         avg_train_loss_per_update = 0
         avg_val_loss_per_update = 0
         optimizer.state.clear() # clears accumulated values of the optimizer -- not sure if it is a good idea though
+        in_update_early_stopper.reset()
         for epoch_i in range(epochs_per_update):
+            
             avg_train_loss, avg_val_loss = regress_epoch_train(X_train, X_val, y_train, y_val, model, loss_fn, optimizer, epoch_i, cfg.train.bellman.in_update_batch_size)
 
             avg_train_loss_per_update += float(avg_train_loss)
@@ -342,7 +292,6 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
             in_update_early_stopper(avg_val_loss, model)
             if in_update_early_stopper.early_stop:
                 model.load_state_dict(in_update_early_stopper.get_model_weights())
-                in_update_early_stopper.reset()
                 break
 
         avg_train_loss_per_update /= (epoch_i+1)
@@ -351,7 +300,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
 
         exp_saver.trigger_saving_every("bellman_checkpoints", f"update_{bellman_i}_val_loss_{avg_val_loss:.5f}", model, optimizer, bellman_i, cfg.train.bellman.save_every)
         exp_saver.trigger_saving_best("special_checkpoints", f"bellman_best_update_{bellman_i}_val_loss_{avg_val_loss:.5f}", model, optimizer, bellman_i, global_early_stopper.improvement_on_last_epoch, cfg.train.bellman.save_best)
-
+        exp_saver.trigger_r2_sync(bellman_i, cfg.train.bellman.r2_sync_every)
         if global_early_stopper.early_stop:
             break
         
@@ -359,6 +308,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
         # logger.info(f"Bellman_update: {bellman_i} | Avg Train Loss: {avg_train_loss_per_update:.4f} | Avg Val Loss: {avg_val_loss_per_update:.4f}")
 
     exp_saver.save_training_state("special_checkpoints", f"bellman_last", model, optimizer, bellman_i)
+    exp_saver.sync_with_r2()
 
 
 ### Taken and modified from  https://github.com/Bjarten/early-stopping-pytorch
@@ -367,7 +317,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
 
 class EarlyStopper:
     """Early stops the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pt', in_mem_saving=False, label="", trace_func=print):
+    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pt', in_mem_saving=False, label="", trace_func=logger.info):
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.

@@ -27,7 +27,9 @@ def draw_trajectories(graph, model, trajs_len, trajs_num):
         y_tr = y_trajs[:,traj_i].detach().cpu().numpy()
         ax.plot(y_tr, y_model_tr, c=cmap(traj_i/trajs_num), alpha=0.5)
         ax.grid(True)
-
+    y_lim = ax.get_ylim()
+    ax.plot([0,y_lim[1]], [0,y_lim[1]], c="black", linewidth=1, linestyle='--', alpha=0.8)
+    ax.set_ylim([0,y_lim[1]])
     return fig, ax
 
 
@@ -151,8 +153,6 @@ def draw_eval_figures(
     ):
 
     
- 
-
     output_dir = exp_dir / "figures"
     output_dir.mkdir(exist_ok=True, parents=True)
 

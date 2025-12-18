@@ -6,7 +6,7 @@ requires = ["setuptools"]
 # https://packaging.python.org/en/latest/specifications/declaring-project-metadata/
 name = "vandedok_cayley_toolkit"
 version = "0.1.0"
-description = "Toolkit for styding cayley graphs"
+description = "Toolkit for studying cayley graphs"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
@@ -15,10 +15,19 @@ authors = [{ name = "Anton Naumov" }]
 
 # https://peps.python.org/pep-0508/
 dependencies = [
-    "numpy",
-    "scipy",
-    "networkx",
+    "pydantic>=2.12.5",
+    "numpy>=2.1.0",
+    "scipy>=1.16.3",
+    "networkx>=3.6",
+    "matplotlib>=3.10.7",
+    "seaborn",
+    "pandas>=2.3.3",
+    "tensorboard>=2.20.0",
+    "scikit-learn>=1.7.2",
 ]
+
+[project.scripts]
+vd_cayleypy_train = "vandedok_cayley_toolkit.ml.run:main"
 
 
 [tool.pylint."FORMAT"]
