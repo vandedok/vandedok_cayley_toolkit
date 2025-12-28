@@ -4,7 +4,7 @@ from pathlib import Path
 from shutil  import rmtree
 import torch
 from .cfg import CayleyMLCfg
-from .. import write_json, read_json, sync_r2_bucket, get_r2_bucket_usage_with_api
+from .. import write_json, read_json, sync_s3_bucket, get_r2_bucket_usage_with_api
 
 
 
@@ -16,7 +16,7 @@ class ExperimentSaver:
             cfg: CayleyMLCfg, 
             secrets:str|Path=None, 
             r2_limit_gb=8, 
-            r2_sync_checkpoints=False,
+            s3_sync_checkpoints=False,
             trace_func=print, 
             overwrite=False,
         ):
@@ -36,7 +36,7 @@ class ExperimentSaver:
         self.best_cpt_path = None
         self.secrets = read_json(secrets) if secrets is not None else None
         self.r2_limit_gb = r2_limit_gb
-        self.r2_sync_checkpoints = r2_sync_checkpoints
+        self.s3_sync_checkpoints = s3_sync_checkpoints
         self.save_cfg(cfg)
         
 
@@ -105,27 +105,32 @@ class ExperimentSaver:
         else:
             self.trace_func("No R2 secrets provided, skipping R2 sync.")
 
-    def sync_with_r2(self, extra_exclude_patterns: list[str]=[]):
+    def sync_with_s3(self, extra_exclude_patterns: list[str]=[]):
         if self.secrets is not None:
             try:
+                do_sync=True
+                if self.r2_limit_gb:
+                    result = get_r2_bucket_usage_with_api(
+                        account_id=self.secrets['CLOUDFLARE_ACCOUNT_ID'],
+                        bucket_name=self.secrets['CLOUDFLARE_R2_BUCKET_NAME'],
+                        api_token=self.secrets['CLOUDFLARE_R2_READ_TOKEN'],
+                    )
+                    
+                    if int(result["payloadSize"]) + int(result["metadataSize"]) > self.r2_limit_gb * 2**30:
+                        self.trace_func(f"R2 bucket size limit exceeded ({self.r2_limit_gb} GB), not syncing.")
+                        do_sync = False
 
-                result = get_r2_bucket_usage_with_api(
-                    account_id=self.secrets['CLOUDFLARE_ACCOUNT_ID'],
-                    bucket_name=self.secrets['CLOUDFLARE_R2_BUCKET_NAME'],
-                    api_token=self.secrets['CLOUDFLARE_R2_READ_TOKEN'],
-                )
-                if int(result["payloadSize"]) + int(result["metadataSize"]) > self.r2_limit_gb * 2**30:
-                    self.trace_func(f"R2 bucket size limit exceeded ({self.r2_limit_gb} GB), not syncing.")
-                else:
+                if do_sync:
                     self.trace_func("Syncing experiment directory with R2...")
 
-                    if self.r2_sync_checkpoints is False:
+                    if self.s3_sync_checkpoints is False:
                         exclude_patterns = extra_exclude_patterns + ["*.ckpt.pt"]
 
-                    sync_r2_bucket(
-                        cf_account_id=self.secrets['CLOUDFLARE_ACCOUNT_ID'],
-                        r2_access_key=self.secrets['AWS_ACCESS_KEY_ID'],
-                        r2_secret_access_key=self.secrets['AWS_SECRET_ACCESS_KEY'],
+                    sync_s3_bucket(
+                        s3_endpoit=f"https://{self.secrets['CLOUDFLARE_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+                        s3_provider="Cloudflare",
+                        s3_access_key=self.secrets['AWS_ACCESS_KEY_ID'],
+                        s3_secret_access_key=self.secrets['AWS_SECRET_ACCESS_KEY'],
                         path_to_dir=self.exp_dir,
                         bucket_name="cayleypy",
                         exclude_patterns=exclude_patterns,
