@@ -90,10 +90,10 @@ class ExperimentSaver:
             self.save_training_state(subpath, filename, model, optimizer, step_i)
             self.best_cpt_path = self.get_checkpoint_path(subpath, filename)
 
-    def trigger_r2_sync(self, step_i, sync_every):
+    def trigger_s3_sync(self, step_i, sync_every):
         if self.secrets is not None:
             if sync_every is not None and step_i%sync_every==0:
-                self.sync_with_r2()
+                self.sync_with_s3()
         else:
             self.trace_func("No R2 secrets provided, skipping R2 sync.")
 
@@ -120,7 +120,7 @@ class ExperimentSaver:
                         self.trace_func(f"R2 bucket size limit exceeded ({self.r2_limit_gb} GB), not syncing.")
                         do_sync = False
 
-                if do_sync:
+                if do_sync
                     self.trace_func("Syncing experiment directory with R2...")
 
                     if self.s3_sync_checkpoints is False:

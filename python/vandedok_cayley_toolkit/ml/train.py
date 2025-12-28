@@ -300,7 +300,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
 
         exp_saver.trigger_saving_every("bellman_checkpoints", f"update_{bellman_i}_val_loss_{avg_val_loss:.5f}", model, optimizer, bellman_i, cfg.train.bellman.save_every)
         exp_saver.trigger_saving_best("special_checkpoints", f"bellman_best_update_{bellman_i}_val_loss_{avg_val_loss:.5f}", model, optimizer, bellman_i, global_early_stopper.improvement_on_last_epoch, cfg.train.bellman.save_best)
-        exp_saver.trigger_r2_sync(bellman_i, cfg.train.bellman.r2_sync_every)
+        exp_saver.trigger_s3_sync(bellman_i, cfg.train.bellman.s3_sync_every)
         if global_early_stopper.early_stop:
             break
         
@@ -308,7 +308,7 @@ def train_with_bellman(cfg: CayleyMLCfg, graph: CayleyGraph, model: torch.nn.Mod
         # logger.info(f"Bellman_update: {bellman_i} | Avg Train Loss: {avg_train_loss_per_update:.4f} | Avg Val Loss: {avg_val_loss_per_update:.4f}")
 
     exp_saver.save_training_state("special_checkpoints", f"bellman_last", model, optimizer, bellman_i)
-    exp_saver.sync_with_r2()
+    exp_saver.trigger_s3_sync()
 
 
 ### Taken and modified from  https://github.com/Bjarten/early-stopping-pytorch
