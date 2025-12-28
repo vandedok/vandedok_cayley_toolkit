@@ -120,7 +120,7 @@ class ExperimentSaver:
                         self.trace_func(f"R2 bucket size limit exceeded ({self.r2_limit_gb} GB), not syncing.")
                         do_sync = False
 
-                if do_sync
+                if do_sync:
                     self.trace_func("Syncing experiment directory with R2...")
 
                     if self.s3_sync_checkpoints is False:
